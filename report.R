@@ -5,50 +5,64 @@
 #'     theme: united
 #'     highlight: textmate
 #' author: "Kamil Ciemniewski <kamil@ciemniew.ski>"
-#' title: "My Report"
+#' title: "Classifying the dumbell activity correctness"
 #' ---
 
-#+ load-libraries, messages=FALSE
+#+ load-libraries, message=FALSE, warning=FALSE
 library(tidyverse)
 library(tidymodels)
+library(magrittr)
+library(dlookr)
+library(knitr)
+library(kableExtra)
 
-#+ download-data, messages=FALSE, warning=FALSE, cache=TRUE
-fraining.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
-training.path <- "pml-training.csv"
+#+ download-data, message=FALSE, warning=FALSE, cache=TRUE, collapse=TRUE
+training_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training_csv"
+training_path <- "pml-training.csv"
 
-testing.url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
-testing.path <- "pml-testing.csv"
+testing_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+testing_path <- "pml-testing.csv"
 
-if(!file.exists(training.path)) {
-  download.file(training.url, training.path)
+if(!file.exists(training_path)) {
+  download.file(training_url, training_path)
 }
 
-if(!file.exists(testing.path)) {
-  download.file(testing.url, testing.path)
+if(!file.exists(testing_path)) {
+  download.file(testing_url, testing_path)
 }
 
-#+ load-data, messages=FALSE, warning=FALSE, cache=TRUE, results='hide'
-training.data <- read_csv(training.path)
-testing.data <- read_csv(testing.path)
+#+ load-data, message=FALSE, warning=FALSE, cache=TRUE, results='hide', collapse=TRUE
+training_data <- read_csv(training_path) %>% mutate(set="training")
+testing_data <- read_csv(testing_path) %>% mutate(set="testing", classe=NA) %>% select(-problem_id)
+dataset <- rbind(training_data, testing_data)
 
-add_window_id <- function(tbl) {
-  tbl %>%
-    group_by(user_name) %>%
-    mutate(window_id = cumsum(new_window == "yes")) %>%
-    ungroup()
-}
+#+ correct-data-types, collapse=TRUE, warning=FALSE
+numeric_columns <- names(
+  dataset %>%
+    select(-classe, -set, -raw_timestamp_part_1,
+           -raw_timestamp_part_2, -cvtd_timestamp,
+           -num_window, -new_window, -user_name
+    )
+)
 
-add_user_window_id <- function(tbl) {
-  tbl %>%
-    mutate(user_window_id=paste(user_name, window_id))
-}
+dataset[, numeric_columns] %<>% lapply(function(x) as.numeric(as.character(x)))
 
-training.data <- training.data %>%
-  add_window_id() %>%
-  add_user_window_id()
+#' ## Data Exploration
 
-testing.data <- testing.data %>%
-  add_window_id() %>%
-  add_user_window_id()
+#+ missing-vars, collapse=TRUE
+missing_variables <- diagnose(dataset) %>%
+  filter(missing_count > 0 & variables != "classe") %>%
+  select(variables, missing_percent)
 
-group_vfold_cv(training.data, group = "user_window_id", v=10)
+missing_variable_names <- missing_variables$variables
+
+missing_variables %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  scroll_box(width = "100%", height = "400px")
+
+#' Let's now create the preprocessing recipy:
+
+rec <- recipe(classe ~ ., data=dataset) %>%
+  step_rm(set, contains('timestamp'), one_of(missing_variable_names)) %>%
+  step_nzv(all_predictors())
