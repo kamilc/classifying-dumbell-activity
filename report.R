@@ -17,6 +17,7 @@ library(knitr)
 library(kableExtra)
 library(furrr)
 library(purrr)
+library(glue)
 
 plan(multiprocess)
 
@@ -52,6 +53,14 @@ training_data[, numeric_columns] %<>% lapply(function(x) as.numeric(as.character
 testing_data[, numeric_columns] %<>% lapply(function(x) as.numeric(as.character(x)))
 
 #' ## Data Exploration
+
+#+ classe-histogram, warning=FALSE, message=FALSE
+training_data %>%
+  ggplot(aes(x=classe)) +
+  geom_histogram(stat='count')
+
+#' From this we can see that the `classe` output variable is slightly imbalanced. We might
+#' want to do a special kind of sampling when training.
 
 #+ missing-vars, collapse=TRUE
 missing_variables <- diagnose(training_data) %>%
@@ -113,8 +122,128 @@ rec %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
   scroll_box(width = "100%", height = "400px")
 
-#' # Defining the model stack as the recipe step
+mod_formula <- as.formula(classe ~ .)
 
-resamples <- vfold_cv(training_data, v=10, repeats=10)
+#' # Defining the model stack
+
+model_specs <- list(
+  boost_tree_1 = list(
+    final=FALSE,
+    fun=boost_tree,
+    engine = "xgboost",
+    params = list(
+      mtry=10
+    )
+  ),
+  boost_tree_2 = list(
+    final=FALSE,
+    fun=boost_tree,
+    engine = "xgboost",
+    params = list(
+      mtry=15
+    )
+  ),
+  mlp_1 = list(
+    final=FALSE,
+    fun=mlp,
+    engine = "nnet",
+    params = list(
+      hidden_units=16,
+      dropout=0.1,
+      activation='softmax'
+    )
+  ),
+  mlp_2 = list(
+    final=FALSE,
+    fun=mlp,
+    engine = "nnet",
+    params = list(
+      hidden_units=32,
+      dropout=0.3,
+      activation='softmax'
+    )
+  ),
+  nearest_neighbor_1 = list(
+    final=FALSE,
+    fun=nearest_neighbor,
+    engine = "kknn",
+    params = list(
+      neighbors=3
+    )
+  ),
+  nearest_neighbor_2 = list(
+    final=FALSE,
+    fun=nearest_neighbor,
+    engine = "kknn",
+    params = list(
+      neighbors=5
+    )
+  ),
+  svm_rbf_1 = list(
+    final=FALSE,
+    fun=svm_rbf,
+    engine = "kernlab",
+    params = list(
+      rbf_sigma=0.1
+    )
+  ),
+  svm_rbf_2 = list(
+    final=FALSE,
+    fun=svm_rbf,
+    engine = "kernlab",
+    params = list(
+      rbf_sigma=0.2
+    )
+  ),
+  final_model_spec = list(
+    final=TRUE,
+    fun=boost_tree,
+    engine = "xgboost",
+    params = list(
+      mtry=15
+    )
+  )
+)
+
+#' Defining the final prediction model that will take the predictions of other
+#' models into account to make it a stacked ensemble:
 
 
+train <- function(dataset) {
+  # return the tibble with trained models
+}
+
+construct_models <- function(model_specs) {
+  model_from_spec <- function(model_spec) {
+    args <- rlang::duplicate(model_spec$params)
+    args$mode = "classification"
+    do.call(model_spec$fun, args)
+  }
+
+  tibble(
+    name=names(model_specs),
+    model=map(model_specs, model_from_spec),
+    final=map_int(model_specs, function(m) m$final)
+  )
+}
+
+predict_classes <- function(dataset, mod_formula) {
+  # return tibble with each model result
+}
+
+predict_results <- function(dataset, mod_formula) {
+  # return tibble with each model result
+}
+
+cv_folds <- vfold_cv(training_data, strata="classe", v=10, repeats=10)
+
+cv_folds %<>% mutate(recipes = map(splits, prepper, recipe = rec, retain = TRUE))
+
+cv_folds %<>% mutate(results=map(splits, predict_results, mod_formula))
+
+cv_folds %<>% mutate(results=map(splits, predict_results, mod_formula))
+
+#' Let's do our final submission predictions:
+
+trained_models <- train(training_data)
+predicted <- predict_classes(training_data, trained_models)
