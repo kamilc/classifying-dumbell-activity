@@ -21,6 +21,8 @@ library(glue)
 
 plan(multiprocess)
 
+document_seed <- 1986
+
 #+ download-data, message=FALSE, warning=FALSE, cache=TRUE, collapse=TRUE
 training_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training_csv"
 training_path <- "pml-training.csv"
@@ -37,7 +39,7 @@ if(!file.exists(testing_path)) {
 }
 
 #+ load-data, message=FALSE, warning=FALSE, cache=TRUE, results='hide', collapse=TRUE
-training_data <- read_csv(training_path)
+training_data <- read_csv(training_path) %>% mutate(classe=as.factor(classe))
 testing_data <- read_csv(testing_path) %>% mutate(classe=NA) %>% select(-problem_id)
 
 #+ correct-data-types, collapse=TRUE, warning=FALSE
@@ -114,6 +116,8 @@ rec %<>% step_pca(all_predictors(), threshold=0.9)
 
 #' Let's see now how many principal components will survive for the model:
 
+set.seed(document_seed)
+
 rec %>%
   prep %>%
   bake(new_data=training_data) %>%
@@ -122,45 +126,31 @@ rec %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
   scroll_box(width = "100%", height = "400px")
 
-mod_formula <- as.formula(classe ~ .)
-
 #' # Defining the model stack
 
 model_specs <- list(
+  multinom_reg_1 = list(
+    final=FALSE,
+    fun=multinom_reg,
+    engine = "glmnet",
+    params = list(
+      penalty=0.01
+    )
+  ),
   boost_tree_1 = list(
     final=FALSE,
     fun=boost_tree,
     engine = "xgboost",
     params = list(
-      mtry=10
+      trees=100
     )
   ),
-  boost_tree_2 = list(
+  rand_forest_1 = list(
     final=FALSE,
-    fun=boost_tree,
-    engine = "xgboost",
+    fun=rand_forest,
+    engine = "randomForest",
     params = list(
-      mtry=15
-    )
-  ),
-  mlp_1 = list(
-    final=FALSE,
-    fun=mlp,
-    engine = "nnet",
-    params = list(
-      hidden_units=16,
-      dropout=0.1,
-      activation='softmax'
-    )
-  ),
-  mlp_2 = list(
-    final=FALSE,
-    fun=mlp,
-    engine = "nnet",
-    params = list(
-      hidden_units=32,
-      dropout=0.3,
-      activation='softmax'
+      trees=100
     )
   ),
   nearest_neighbor_1 = list(
@@ -171,28 +161,12 @@ model_specs <- list(
       neighbors=3
     )
   ),
-  nearest_neighbor_2 = list(
-    final=FALSE,
-    fun=nearest_neighbor,
-    engine = "kknn",
-    params = list(
-      neighbors=5
-    )
-  ),
   svm_rbf_1 = list(
     final=FALSE,
     fun=svm_rbf,
     engine = "kernlab",
     params = list(
       rbf_sigma=0.1
-    )
-  ),
-  svm_rbf_2 = list(
-    final=FALSE,
-    fun=svm_rbf,
-    engine = "kernlab",
-    params = list(
-      rbf_sigma=0.2
     )
   ),
   final_model_spec = list(
@@ -208,12 +182,7 @@ model_specs <- list(
 #' Defining the final prediction model that will take the predictions of other
 #' models into account to make it a stacked ensemble:
 
-
-train <- function(dataset) {
-  # return the tibble with trained models
-}
-
-construct_models <- function(model_specs) {
+construct_models <- function() {
   model_from_spec <- function(model_spec) {
     args <- rlang::duplicate(model_spec$params)
     args$mode = "classification"
@@ -223,25 +192,80 @@ construct_models <- function(model_specs) {
   tibble(
     name=names(model_specs),
     model=map(model_specs, model_from_spec),
+    model_spec=model_specs,
     final=map_int(model_specs, function(m) m$final)
   )
 }
 
-predict_classes <- function(dataset, mod_formula) {
-  # return tibble with each model result
+predict_results <- function(model, model_spec, analysis_data, assessment_data) {
+  set.seed(document_seed)
+
+  model %>%
+    set_engine(model_spec$engine) %>%
+    fit(classe ~ ., data=analysis_data) %>%
+    predict(new_data=assessment_data) %>%
+    pull(.pred_class)
 }
 
-predict_results <- function(dataset, mod_formula) {
-  # return tibble with each model result
+predict_final_results <- function(model, model_spec, analysis_data, assessment_data, model_predictions) {
+  # todo
+}
+
+predict_all_results <- function(analysis_data, assessment_data, models) {
+  # appends predictions to each model row in models
+
+  basic_models <- models %>% filter(final == 0)
+  final_model <- models %>% filter(final == 1)
+
+  model_predictions <- map2(
+    basic_models$model,
+    basic_models$model_spec,
+    predict_results,
+    analysis_data,
+    assessment_data
+  ) %>%
+    map(function(preds){ tibble(classe=preds) }) %>%
+    bind_cols
+
+  names(model_predictions) <- basic_models$name
+
+  browser()
+
+  model_predictions[[nrow(models)]] <- predict_final_results(
+    final_model$model[1],
+    final_model$model_spec[1],
+    analysis_data,
+    assessment_data,
+    model_predictions
+  )
+
+  models$predictions <- model_predictions
+
+  models
+}
+
+predict_all_recipy_results <- function(recipy, models) {
+  predict_all_results(
+    bake(recipy$parameters, new_data=analysis(recipy$data_split)),
+    bake(recipy$parameters, new_data=assessment(recipy$data_split)),
+    models
+  )
+}
+
+split_prepper <- function(data_split, recipy) {
+  list(
+    parameters=prep(recipy, analysis(data_split)),
+    data_split=data_split
+  )
 }
 
 cv_folds <- vfold_cv(training_data, strata="classe", v=10, repeats=10)
 
-cv_folds %<>% mutate(recipes = map(splits, prepper, recipe = rec, retain = TRUE))
+cv_folds %<>% mutate(recipes=future_map(splits, split_prepper, recipy = rec))
 
-cv_folds %<>% mutate(results=map(splits, predict_results, mod_formula))
+cv_folds %<>% mutate(models=map(splits, function(split)  construct_models()))
 
-cv_folds %<>% mutate(results=map(splits, predict_results, mod_formula))
+cv_folds %<>% mutate(models_with_predictions=map2(recipes, models, predict_all_recipy_results))
 
 #' Let's do our final submission predictions:
 
