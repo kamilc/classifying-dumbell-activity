@@ -129,20 +129,12 @@ rec %>%
 #' # Defining the model stack
 
 model_specs <- list(
-  multinom_reg_1 = list(
-    final=FALSE,
-    fun=multinom_reg,
-    engine = "glmnet",
-    params = list(
-      penalty=0.01
-    )
-  ),
   boost_tree_1 = list(
     final=FALSE,
     fun=boost_tree,
     engine = "xgboost",
     params = list(
-      trees=100
+      tree_depth=9
     )
   ),
   rand_forest_1 = list(
@@ -150,7 +142,7 @@ model_specs <- list(
     fun=rand_forest,
     engine = "randomForest",
     params = list(
-      trees=100
+      trees=128
     )
   ),
   nearest_neighbor_1 = list(
@@ -174,7 +166,7 @@ model_specs <- list(
     fun=boost_tree,
     engine = "xgboost",
     params = list(
-      mtry=15
+      tree_depth=9
     )
   )
 )
@@ -197,7 +189,20 @@ construct_models <- function() {
   )
 }
 
-predict_results <- function(model, model_spec, analysis_data, assessment_data) {
+predict_results <- function(model, model_spec, analysis_data, assessment_data, final_assessment_data) {
+  set.seed(document_seed)
+
+  model %<>%
+    set_engine(model_spec$engine) %>%
+    fit(classe ~ ., data=analysis_data)
+
+  list(
+    analysis_results=predict(model, new_data=assessment_data) %>% pull(.pred_class),
+    assessment_results=predict(model, new_data=final_assessment_data) %>% pull(.pred_class)
+  )
+}
+
+predict_final_results <- function(model, model_spec, analysis_data, assessment_data) {
   set.seed(document_seed)
 
   model %>%
@@ -207,39 +212,53 @@ predict_results <- function(model, model_spec, analysis_data, assessment_data) {
     pull(.pred_class)
 }
 
-predict_final_results <- function(model, model_spec, analysis_data, assessment_data, model_predictions) {
-  # todo
-}
-
 predict_all_results <- function(analysis_data, assessment_data, models) {
   # appends predictions to each model row in models
 
   basic_models <- models %>% filter(final == 0)
   final_model <- models %>% filter(final == 1)
 
-  model_predictions <- map2(
+  base_final_split <- initial_split(analysis_data, prop=0.5)
+  base_analysis_data <- analysis(base_final_split)
+  final_analysis_data <- assessment(base_final_split)
+
+  model_predictions <- future_map2(
     basic_models$model,
     basic_models$model_spec,
     predict_results,
-    analysis_data,
+    base_analysis_data,
+    final_analysis_data,
     assessment_data
-  ) %>%
-    map(function(preds){ tibble(classe=preds) }) %>%
-    bind_cols
-
-  names(model_predictions) <- basic_models$name
-
-  browser()
-
-  model_predictions[[nrow(models)]] <- predict_final_results(
-    final_model$model[1],
-    final_model$model_spec[1],
-    analysis_data,
-    assessment_data,
-    model_predictions
   )
 
-  models$predictions <- model_predictions
+  analysis_results <- model_predictions %>%
+    map(function(preds){ tibble(classe=preds$analysis_results) }) %>%
+    bind_cols
+
+  assessment_results <- model_predictions %>%
+    map(function(preds){ tibble(classe=preds$assessment_results) }) %>%
+    bind_cols
+
+  names(analysis_results) <- basic_models$name
+  names(assessment_results) <- basic_models$name
+
+  final_analysis_data <- bind_cols(final_analysis_data, analysis_results)
+  final_assessment_data <- bind_cols(assessment_data, assessment_results)
+
+  final_results <- predict_final_results(
+    final_model$model[[1]],
+    final_model$model_spec[[1]],
+    final_analysis_data,
+    final_assessment_data
+  )
+
+  assessment_results %<>% mutate(final_results=final_results)
+
+  models$predictions <- map(names(assessment_results), function(name) { assessment_results[[name]] })
+
+  models$metric <- map(models$predictions, function(preds) {
+    metrics(tibble(preds=preds, truth=assessment_data$classe), truth, preds)
+  })
 
   models
 }
@@ -259,15 +278,31 @@ split_prepper <- function(data_split, recipy) {
   )
 }
 
+if(file.exists('cv_folds.rda')) {
+  load(file='data.rda')
+}
+
 cv_folds <- vfold_cv(training_data, strata="classe", v=10, repeats=10)
 
 cv_folds %<>% mutate(recipes=future_map(splits, split_prepper, recipy = rec))
 
 cv_folds %<>% mutate(models=map(splits, function(split)  construct_models()))
 
-cv_folds %<>% mutate(models_with_predictions=map2(recipes, models, predict_all_recipy_results))
+if(!exists('accuracies')) {
+  cv_folds %<>% mutate(models=map2(recipes, models, predict_all_recipy_results))
+
+  accuracies <- map_dbl(1:length(model_specs), function(i) {
+    mean(map_dbl(cv_folds$models, function(model) { model$metric[[i]][[3]][[1]]}))
+  })
+
+  names(accuracies) <- names(model_specs)
+
+  save(cv_folds, accuracies, file='data.rds')
+}
+
+accuracies %>%
+  kable() %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
 
 #' Let's do our final submission predictions:
 
-trained_models <- train(training_data)
-predicted <- predict_classes(training_data, trained_models)
