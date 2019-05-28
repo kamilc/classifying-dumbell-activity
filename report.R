@@ -1,7 +1,6 @@
 #' ---
 #' output:
 #'   html_document:
-#'     toc: true
 #'     theme: united
 #'     highlight: textmate
 #' author: "Kamil Ciemniewski <kamil@ciemniew.ski>"
@@ -9,18 +8,20 @@
 #' ---
 
 #' # Summary
-#' This document presents step-by-step process of processing the fitness devices data to classify the activity into 5 groups of correctness.
-
+#' This document presents step-by-step process of processing the fitness devices data to classify the activity into 5 groups of correctness. Here's the description of the challenge:
+#'
+#'
 #' > Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
-
+#'
+#'
 #' # Notes for peer-reviewers
-
-#' This work uses the family of R packages called [tidymodels](https://github.com/tidymodels). It's a successor of the [caret](http://topepo.github.io/caret/index.html) package that this course was based on. It's been created buy the same author. The reason was the ease of conducting croiss-validation the **proper** way as descibed in this report's body.
-
+#'
+#' This work uses the family of R packages called [tidymodels](https://github.com/tidymodels). It's a successor of the [caret](http://topepo.github.io/caret/index.html) package that this course was based on. It's been created by the same author. The reason was the ease of conducting croiss-validation the **proper** way as descibed in this report's body.
+#'
 #' Please note also that this file has been compiled out of a regular R source file - not the Rmd "R Markdown" one. This hasn't been covered in any of the specialization's courses but you can do it by later compiling the file by hand with: `rmarkdown::render('report.R')`.
-
+#'
 #' # Data exploration
-
+#'
 #' Let's start off by loading up the libraries we'll use:
 
 #+ load-libraries, message=FALSE, warning=FALSE
@@ -75,9 +76,7 @@ testing_data <- read_csv(testing_path) %>% mutate(classe=NA) %>% select(-problem
 set.seed(document_seed)
 
 training_data %>%
-  sample_n(10) %>%
-  kable() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+  glimpse()
 
 #' All numerical data have been gathered from the devices. We only have statistics to tell us if some values appear to be outlying or not. In this work I'm choosing to treat those values as they are, trusting in device's ability to gather data correctly.
 
@@ -94,7 +93,7 @@ numeric_columns <- names(
 
 #' There seem to be some variables containing numerical data that were coded in strings. We need to parse those numbers correctly. Notice the use of the `%<>%` operator that comes from the `magrittr` package. It's rarely see nand the meaning is "pipe to the right but assign the result back":
 
-#+ character-to-numeric
+#+ character-to-numeric, warning=FALSE, message=FALSE
 training_data[, numeric_columns] %<>% lapply(function(x) as.numeric(as.character(x)))
 testing_data[, numeric_columns] %<>% lapply(function(x) as.numeric(as.character(x)))
 
@@ -175,7 +174,8 @@ rec %>%
   bake(new_data=training_data) %>%
   sample_n(size=10) %>%
   kable() %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"))
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  scroll_box(width = "100%", height = "400px")
 
 #' # Defining the model stack
 
@@ -348,7 +348,7 @@ if(file.exists('data.rda')) {
   load(file='data.rda')
 }
 
-#' If they haven't been loaded though, let's define the data split, construct the models, prepare the data preprocessing parameters and do the actualy training and testing in splits:
+#' If they haven't been loaded though, let's define the data split, construct the models, prepare the data preprocessing parameters and do the actualy training and testing in splits. Notice the `strata` argument to `vfold_cv` that's going to sample the splits to make the classes as balanced as possible:
 
 if(!exists('accuracies')) {
   cv_folds <- vfold_cv(training_data, strata="classe", v=10, repeats=10)
@@ -373,11 +373,11 @@ accuracies %>%
 
 #' We can see that the theory behind the model stacking is sound indeed.
 
-#' Let's do our final submission predictions= now:
+#' Let's do our final submission predictions now:
 
 models <- construct_models()
 
-#+ main-prepping, warning=FALSE
+#+ main-prepping, warning=FALSE, cache=TRUE, collapse=TRUE
 main_prepped <- prep(rec, training_data)
 
 test_results <- predict_all_results(juice(main_prepped), bake(main_prepped, new_data=testing_data), models)
