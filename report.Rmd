@@ -1,0 +1,5 @@
+This file exists only to conform to the requirement of having the "Rmd" file in the repo. The report has been compiled with:
+
+rmarkdown::compile('report.R')
+
+The RMarkdown package allows the use of normal R files with comments to create reports. See the report.R file for the source code of the HTML output report.
